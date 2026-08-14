@@ -74,6 +74,13 @@ from .ranges import TSMULTIRANGE
 from .ranges import TSRANGE
 from .ranges import TSTZMULTIRANGE
 from .ranges import TSTZRANGE
+from .rls import CreatePolicy
+from .rls import DisableRowLevelSecurity
+from .rls import DropPolicy
+from .rls import EnableRowLevelSecurity
+from .rls import ForceRowLevelSecurity
+from .rls import NoForceRowLevelSecurity
+from .rls import Policy
 from .types import BIT
 from .types import BYTEA
 from .types import CIDR
@@ -167,4 +174,11 @@ __all__ = (
     "insert",
     "Insert",
     "distinct_on",
+    "Policy",
+    "CreatePolicy",
+    "DropPolicy",
+    "EnableRowLevelSecurity",
+    "DisableRowLevelSecurity",
+    "ForceRowLevelSecurity",
+    "NoForceRowLevelSecurity",
 )

@@ -134,6 +134,19 @@ pg_class = Table(
     Column("reloptions", ARRAY(Text)),
 )
 
+pg_policies = Table(
+    "pg_policies",
+    pg_catalog_meta,
+    Column("schemaname", NAME),
+    Column("tablename", NAME),
+    Column("policyname", NAME),
+    Column("permissive", Text),
+    Column("roles", ARRAY(NAME)),
+    Column("cmd", Text),
+    Column("qual", Text),
+    Column("with_check", Text),
+)
+
 pg_type = Table(
     "pg_type",
     pg_catalog_meta,

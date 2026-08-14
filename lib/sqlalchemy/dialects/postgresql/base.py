@@ -1880,6 +1880,7 @@ from typing import cast
 from typing import Dict
 from typing import List
 from typing import Optional
+from typing import Sequence
 from typing import Tuple
 from typing import TYPE_CHECKING
 from typing import TypedDict
@@ -2808,6 +2809,80 @@ class PGDDLCompiler(compiler.DDLCompiler):
         domain = drop.element
         return f"DROP DOMAIN {self.preparer.format_type(domain)}"
 
+    def _format_policy_name(self, name):
+        self.dialect.validate_identifier(name)
+        return self.preparer.quote(name)
+
+    def _format_policy_role(self, role):
+        if role in ("PUBLIC", "CURRENT_ROLE", "CURRENT_USER", "SESSION_USER"):
+            return role
+        self.dialect.validate_identifier(role)
+        return self.preparer.quote(role)
+
+    def _format_policy_expression(self, expression):
+        return self.sql_compiler.process(
+            expression, include_table=False, literal_binds=True
+        )
+
+    def _policy_clauses(self, policy):
+        clauses = [
+            "TO "
+            + ", ".join(
+                self._format_policy_role(role) for role in policy.roles
+            )
+        ]
+        if policy.using is not None:
+            clauses.append(
+                "USING (%s)" % self._format_policy_expression(policy.using)
+            )
+        if policy.check is not None:
+            clauses.append(
+                "WITH CHECK (%s)"
+                % self._format_policy_expression(policy.check)
+            )
+        return clauses
+
+    def visit_create_policy(self, create, **kw):
+        policy = create.element
+        clauses = [
+            "CREATE POLICY %s ON %s"
+            % (
+                self._format_policy_name(policy.name),
+                self.preparer.format_table(policy.table),
+            )
+        ]
+        if not policy.permissive:
+            clauses.append("AS RESTRICTIVE")
+        clauses.append("FOR %s" % policy.command)
+        clauses.extend(self._policy_clauses(policy))
+        return " ".join(clauses)
+
+    def visit_drop_policy(self, drop, **kw):
+        policy = drop.element
+        return "DROP POLICY%s %s ON %s" % (
+            " IF EXISTS" if drop.if_exists else "",
+            self._format_policy_name(policy.name),
+            self.preparer.format_table(policy.table),
+        )
+
+    def _visit_row_level_security(self, statement, action):
+        return "ALTER TABLE %s %s ROW LEVEL SECURITY" % (
+            self.preparer.format_table(statement.element),
+            action,
+        )
+
+    def visit_enable_row_level_security(self, enable, **kw):
+        return self._visit_row_level_security(enable, "ENABLE")
+
+    def visit_disable_row_level_security(self, disable, **kw):
+        return self._visit_row_level_security(disable, "DISABLE")
+
+    def visit_force_row_level_security(self, force, **kw):
+        return self._visit_row_level_security(force, "FORCE")
+
+    def visit_no_force_row_level_security(self, no_force, **kw):
+        return self._visit_row_level_security(no_force, "NO FORCE")
+
     def _prepare_withclause_opts(self, withclause):
         with_opts = []
         for param, value in withclause.items():
@@ -3393,6 +3468,34 @@ class ReflectedEnum(ReflectedNamedType):
     """The labels that compose the enum."""
 
 
+class ReflectedPolicy(TypedDict):
+    """Represents a reflected PostgreSQL row security policy."""
+
+    name: str
+    """Name of the policy."""
+    command: str
+    """Command governed by the policy."""
+    roles: List[str]
+    """Database roles to which the policy applies."""
+    using: Optional[str]
+    """Row visibility expression, if present."""
+    check: Optional[str]
+    """Row acceptance expression, if present."""
+    permissive: bool
+    """Whether the policy is permissive rather than restrictive."""
+
+
+class ReflectedRowSecurity(TypedDict):
+    """Represents the row security state of a PostgreSQL table."""
+
+    enabled: bool
+    """Whether row security is enabled for the table."""
+    forced: bool
+    """Whether row security applies to the table owner."""
+    policies: List[ReflectedPolicy]
+    """Policies defined for the table, ordered by name."""
+
+
 class PGInspector(reflection.Inspector):
     dialect: PGDialect
 
@@ -3465,6 +3568,62 @@ class PGInspector(reflection.Inspector):
         with self._operation_context() as conn:
             return self.dialect._load_enums(
                 conn, schema, info_cache=self.info_cache
+            )
+
+    def get_row_security(
+        self, table_name: str, schema: Optional[str] = None
+    ) -> ReflectedRowSecurity:
+        """Return the row security state for a table.
+
+        The returned dictionary contains the ``enabled`` and ``forced`` table
+        flags together with a ``policies`` list. Each policy reports its name,
+        command, roles, permissive mode, and its optional ``using`` and
+        ``check`` expressions.
+
+        :param table_name: string name of the table. For special quoting, use
+         :class:`.quoted_name`.
+        :param schema: schema name. If omitted, the default schema is used.
+
+        .. versionadded:: 2.1
+        """
+        with self._operation_context() as conn:
+            return self.dialect.get_row_security(
+                conn,
+                table_name,
+                schema,
+                info_cache=self.info_cache,
+            )
+
+    def get_multi_row_security(
+        self,
+        schema: Optional[str] = None,
+        filter_names: Optional[Sequence[str]] = None,
+        kind: ObjectKind = ObjectKind.TABLE,
+        scope: ObjectScope = ObjectScope.DEFAULT,
+    ) -> Dict[Tuple[Optional[str], str], ReflectedRowSecurity]:
+        """Return row security state for tables in a schema.
+
+        The tables can be limited with ``filter_names``. Each dictionary key
+        is a ``(schema, table_name)`` pair and each value has the same shape
+        returned by :meth:`.get_row_security`.
+
+        :param schema: schema name. If omitted, the default schema is used.
+        :param filter_names: optional table names to reflect.
+        :param kind: object kind to reflect. Row security applies to tables.
+        :param scope: whether to reflect default, temporary, or all tables.
+
+        .. versionadded:: 2.1
+        """
+        with self._operation_context() as conn:
+            return dict(
+                self.dialect.get_multi_row_security(
+                    conn,
+                    schema=schema,
+                    filter_names=filter_names,
+                    kind=kind,
+                    scope=scope,
+                    info_cache=self.info_cache,
+                )
             )
 
     def get_foreign_table_names(
@@ -4061,6 +4220,93 @@ class PGDialect(default._BackendsMultiReflection, default.DefaultDialect):
                 f"{schema}.{table_name}" if schema else table_name
             )
         return table_oid
+
+    @lru_cache()
+    def _row_security_query(self, schema, has_filter_names, scope):
+        query = (
+            select(
+                pg_catalog.pg_class.c.relname.label("table_name"),
+                pg_catalog.pg_class.c.relrowsecurity.label("enabled"),
+                pg_catalog.pg_class.c.relforcerowsecurity.label("forced"),
+                pg_catalog.pg_policies.c.policyname.label("name"),
+                pg_catalog.pg_policies.c.cmd.label("command"),
+                pg_catalog.pg_policies.c.roles,
+                pg_catalog.pg_policies.c.qual.label("using"),
+                pg_catalog.pg_policies.c.with_check.label("check"),
+                pg_catalog.pg_policies.c.permissive,
+            )
+            .select_from(pg_catalog.pg_class)
+            .where(
+                self._pg_class_relkind_condition(
+                    pg_catalog.RELKINDS_TABLE_NO_FOREIGN
+                ),
+            )
+        )
+        query = self._pg_class_filter_scope_schema(query, schema, scope=scope)
+        if has_filter_names:
+            query = query.where(
+                pg_catalog.pg_class.c.relname.in_(bindparam("filter_names"))
+            )
+        query = query.outerjoin(
+            pg_catalog.pg_policies,
+            sql.and_(
+                pg_catalog.pg_policies.c.schemaname
+                == pg_catalog.pg_namespace.c.nspname,
+                pg_catalog.pg_policies.c.tablename
+                == pg_catalog.pg_class.c.relname,
+            ),
+        ).order_by(
+            pg_catalog.pg_class.c.relname,
+            pg_catalog.pg_policies.c.policyname,
+        )
+        return query
+
+    def get_multi_row_security(
+        self, connection, schema, filter_names, scope, kind, **kw
+    ):
+        if ObjectKind.TABLE not in kind:
+            return {}.items()
+
+        has_filter_names, params = self._prepare_filter_names(filter_names)
+        query = self._row_security_query(schema, has_filter_names, scope)
+        rows = connection.execute(query, params).mappings()
+        states: Dict[Tuple[Optional[str], str], ReflectedRowSecurity] = {}
+        for row in rows:
+            key = (schema, row["table_name"])
+            state = states.setdefault(
+                key,
+                {
+                    "enabled": row["enabled"],
+                    "forced": row["forced"],
+                    "policies": [],
+                },
+            )
+            if row["name"] is None:
+                continue
+            state["policies"].append(
+                {
+                    "name": row["name"],
+                    "command": row["command"].upper(),
+                    "roles": list(row["roles"]),
+                    "using": row["using"],
+                    "check": row["check"],
+                    "permissive": row["permissive"].casefold() == "permissive",
+                }
+            )
+
+        return states.items()
+
+    @reflection.cache
+    def get_row_security(self, connection, table_name, schema=None, **kw):
+        states = self.get_multi_row_security(
+            connection,
+            schema=schema,
+            filter_names=[table_name],
+            scope=ObjectScope.ANY,
+            kind=ObjectKind.TABLE,
+            **kw,
+        )
+        return self._value_or_raise(states, table_name, schema)
 
     @reflection.cache
     def get_schema_names(self, connection, **kw):

@@ -63,6 +63,98 @@ The PostgreSQL HSTORE type as well as hstore literals are supported:
 
 * :class:`_postgresql.hstore` - hstore literal
 
+Row level security
+------------------
+
+PostgreSQL row level security is represented by the
+:class:`_postgresql.Policy` schema object and explicit DDL elements. The
+database evaluates these policies for every SQL access path. They are distinct
+from application query criteria such as
+:func:`_orm.with_loader_criteria`, which only affect ORM statements that use
+that option. These constructs target PostgreSQL 18 and newer.
+
+The following policy permits readers to see rows owned by the current
+application user.
+
+.. code-block:: python
+
+    from sqlalchemy import Column
+    from sqlalchemy import Integer
+    from sqlalchemy import MetaData
+    from sqlalchemy import Table
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import CreatePolicy
+    from sqlalchemy.dialects.postgresql import EnableRowLevelSecurity
+    from sqlalchemy.dialects.postgresql import Policy
+
+    metadata = MetaData()
+    document = Table(
+        "document",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("owner_id", Integer, nullable=False),
+    )
+    read_policy = Policy(
+        "document_read",
+        document,
+        command="SELECT",
+        roles=("application_reader",),
+        using=document.c.owner_id
+        == func.current_setting("app.user_id").cast(Integer),
+    )
+
+    with engine.begin() as connection:
+        connection.execute(EnableRowLevelSecurity(document))
+        connection.execute(CreatePolicy(read_policy))
+
+The available policy DDL elements are :class:`_postgresql.CreatePolicy` and
+:class:`_postgresql.DropPolicy`.
+Table state is controlled by :class:`_postgresql.EnableRowLevelSecurity`,
+:class:`_postgresql.DisableRowLevelSecurity`,
+:class:`_postgresql.ForceRowLevelSecurity`, and
+:class:`_postgresql.NoForceRowLevelSecurity`.
+
+.. warning::
+
+   Table owners normally bypass row security unless it is forced. Superusers
+   and roles with the PostgreSQL ``BYPASSRLS`` attribute always bypass it. See
+   the `PostgreSQL row security documentation
+   <https://www.postgresql.org/docs/current/ddl-rowsecurity.html>`_ for the
+   complete security model.
+
+Policies are not installed implicitly by :meth:`_schema.MetaData.create_all`.
+Applications that want policy DDL to follow table creation can opt in through
+standard :class:`.DDLEvents`.
+
+.. code-block:: python
+
+    from sqlalchemy import event
+
+    event.listen(
+        document,
+        "after_create",
+        EnableRowLevelSecurity(document),
+    )
+    event.listen(document, "after_create", CreatePolicy(read_policy))
+
+Policy expressions may be SQLAlchemy expressions or trusted SQL strings.
+Policy changes require dropping and recreating the policy.
+
+The PostgreSQL Inspector reports the full row security state for one table.
+
+.. code-block:: python
+
+    from sqlalchemy import inspect
+
+    state = inspect(connection).get_row_security("document")
+
+The result contains the table's ``enabled`` and ``forced`` flags and an ordered
+``policies`` list. Each policy reports its name, command, roles, permissive
+mode, and optional ``using`` and ``check`` expressions.
+
+Use :meth:`_postgresql.PGInspector.get_multi_row_security` to reflect several
+tables with one catalog query.
+
 ENUM Types
 ----------
 
@@ -635,6 +727,23 @@ For example::
         during = Column(TSRANGE())
 
         __table_args__ = (ExcludeConstraint(("room", "="), ("during", "&&")),)
+
+PostgreSQL Row Security Constructs
+----------------------------------
+
+.. autoclass:: Policy
+
+.. autoclass:: CreatePolicy
+
+.. autoclass:: DropPolicy
+
+.. autoclass:: EnableRowLevelSecurity
+
+.. autoclass:: DisableRowLevelSecurity
+
+.. autoclass:: ForceRowLevelSecurity
+
+.. autoclass:: NoForceRowLevelSecurity
 
 PostgreSQL DML Constructs
 -------------------------
