@@ -8,8 +8,6 @@
 from __future__ import annotations
 
 from typing import Any
-from typing import cast
-from typing import Optional
 from typing import Sequence
 from typing import TYPE_CHECKING
 
@@ -19,21 +17,11 @@ from ...sql import coercions
 from ...sql import roles as sql_roles
 
 if TYPE_CHECKING:
+    from ...sql._typing import _TextCoercedExpressionArgument
     from ...sql.elements import ClauseElement
 
 
-_COMMANDS = ("ALL", "SELECT", "INSERT", "UPDATE", "DELETE")
-
-
-def _coerce_policy_expression(
-    expression: ClauseElement | str | None,
-) -> ClauseElement | None:
-    if expression is None:
-        return None
-    return cast(
-        "ClauseElement",
-        coercions.expect(sql_roles.DDLExpressionRole, expression),
-    )
+_COMMANDS = frozenset({"ALL", "SELECT", "INSERT", "UPDATE", "DELETE"})
 
 
 class Policy(schema.SchemaItem):
@@ -60,6 +48,14 @@ class Policy(schema.SchemaItem):
     __visit_name__ = "policy"
     create_drop_stringify_dialect = "postgresql"
 
+    name: str
+    table: schema.Table
+    command: str
+    roles: tuple[str, ...]
+    using: ClauseElement | None
+    check: ClauseElement | None
+    permissive: bool
+
     def __init__(
         self,
         name: str,
@@ -67,10 +63,10 @@ class Policy(schema.SchemaItem):
         *,
         command: str = "ALL",
         roles: str | Sequence[str] = "PUBLIC",
-        using: ClauseElement | str | None = None,
-        check: ClauseElement | str | None = None,
+        using: _TextCoercedExpressionArgument[bool] | None = None,
+        check: _TextCoercedExpressionArgument[bool] | None = None,
         permissive: bool = True,
-        info: Optional[dict[Any, Any]] = None,
+        info: dict[Any, Any] | None = None,
     ) -> None:
         command = command.upper()
         normalized_roles = (roles,) if isinstance(roles, str) else tuple(roles)
@@ -86,8 +82,16 @@ class Policy(schema.SchemaItem):
         self.table = table
         self.command = command
         self.roles = normalized_roles
-        self.using = _coerce_policy_expression(using)
-        self.check = _coerce_policy_expression(check)
+        self.using = (
+            coercions.expect(sql_roles.DDLExpressionRole, using)
+            if using is not None
+            else None
+        )
+        self.check = (
+            coercions.expect(sql_roles.DDLExpressionRole, check)
+            if check is not None
+            else None
+        )
         self.permissive = permissive
         if info is not None:
             self.info = info
@@ -98,8 +102,8 @@ class Policy(schema.SchemaItem):
         name: str,
         command: str,
         roles: Sequence[str],
-        using: ClauseElement | str | None,
-        check: ClauseElement | str | None,
+        using: _TextCoercedExpressionArgument[bool] | None,
+        check: _TextCoercedExpressionArgument[bool] | None,
     ) -> None:
         if not name:
             raise exc.ArgumentError("Policy name cannot be empty")

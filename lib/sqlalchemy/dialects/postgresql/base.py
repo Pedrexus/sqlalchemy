@@ -2833,42 +2833,38 @@ class PGDDLCompiler(compiler.DDLCompiler):
         ]
         if policy.using is not None:
             clauses.append(
-                "USING (%s)" % self._format_policy_expression(policy.using)
+                f"USING ({self._format_policy_expression(policy.using)})"
             )
         if policy.check is not None:
             clauses.append(
-                "WITH CHECK (%s)"
-                % self._format_policy_expression(policy.check)
+                f"WITH CHECK ({self._format_policy_expression(policy.check)})"
             )
         return clauses
 
     def visit_create_policy(self, create, **kw):
         policy = create.element
         clauses = [
-            "CREATE POLICY %s ON %s"
-            % (
-                self._format_policy_name(policy.name),
-                self.preparer.format_table(policy.table),
-            )
+            f"CREATE POLICY {self._format_policy_name(policy.name)} ON "
+            f"{self.preparer.format_table(policy.table)}"
         ]
         if not policy.permissive:
             clauses.append("AS RESTRICTIVE")
-        clauses.append("FOR %s" % policy.command)
+        clauses.append(f"FOR {policy.command}")
         clauses.extend(self._policy_clauses(policy))
         return " ".join(clauses)
 
     def visit_drop_policy(self, drop, **kw):
         policy = drop.element
-        return "DROP POLICY%s %s ON %s" % (
-            " IF EXISTS" if drop.if_exists else "",
-            self._format_policy_name(policy.name),
-            self.preparer.format_table(policy.table),
+        if_exists = " IF EXISTS" if drop.if_exists else ""
+        return (
+            f"DROP POLICY{if_exists} {self._format_policy_name(policy.name)} "
+            f"ON {self.preparer.format_table(policy.table)}"
         )
 
     def _visit_row_level_security(self, statement, action):
-        return "ALTER TABLE %s %s ROW LEVEL SECURITY" % (
-            self.preparer.format_table(statement.element),
-            action,
+        return (
+            f"ALTER TABLE {self.preparer.format_table(statement.element)} "
+            f"{action} ROW LEVEL SECURITY"
         )
 
     def visit_enable_row_level_security(self, enable, **kw):
@@ -3475,11 +3471,11 @@ class ReflectedPolicy(TypedDict):
     """Name of the policy."""
     command: str
     """Command governed by the policy."""
-    roles: List[str]
+    roles: list[str]
     """Database roles to which the policy applies."""
-    using: Optional[str]
+    using: str | None
     """Row visibility expression, if present."""
-    check: Optional[str]
+    check: str | None
     """Row acceptance expression, if present."""
     permissive: bool
     """Whether the policy is permissive rather than restrictive."""
@@ -3492,7 +3488,7 @@ class ReflectedRowSecurity(TypedDict):
     """Whether row security is enabled for the table."""
     forced: bool
     """Whether row security applies to the table owner."""
-    policies: List[ReflectedPolicy]
+    policies: list[ReflectedPolicy]
     """Policies defined for the table, ordered by name."""
 
 
@@ -3571,7 +3567,7 @@ class PGInspector(reflection.Inspector):
             )
 
     def get_row_security(
-        self, table_name: str, schema: Optional[str] = None
+        self, table_name: str, schema: str | None = None
     ) -> ReflectedRowSecurity:
         """Return the row security state for a table.
 
@@ -3596,11 +3592,11 @@ class PGInspector(reflection.Inspector):
 
     def get_multi_row_security(
         self,
-        schema: Optional[str] = None,
-        filter_names: Optional[Sequence[str]] = None,
+        schema: str | None = None,
+        filter_names: Sequence[str] | None = None,
         kind: ObjectKind = ObjectKind.TABLE,
         scope: ObjectScope = ObjectScope.DEFAULT,
-    ) -> Dict[Tuple[Optional[str], str], ReflectedRowSecurity]:
+    ) -> dict[tuple[str | None, str], ReflectedRowSecurity]:
         """Return row security state for tables in a schema.
 
         The tables can be limited with ``filter_names``. Each dictionary key
@@ -4270,7 +4266,7 @@ class PGDialect(default._BackendsMultiReflection, default.DefaultDialect):
         has_filter_names, params = self._prepare_filter_names(filter_names)
         query = self._row_security_query(schema, has_filter_names, scope)
         rows = connection.execute(query, params).mappings()
-        states: Dict[Tuple[Optional[str], str], ReflectedRowSecurity] = {}
+        states: dict[tuple[str | None, str], ReflectedRowSecurity] = {}
         for row in rows:
             key = (schema, row["table_name"])
             state = states.setdefault(
