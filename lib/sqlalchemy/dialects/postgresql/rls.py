@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from typing import Any
+from typing import ClassVar
 from typing import Sequence
 from typing import TYPE_CHECKING
 
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from ...sql.elements import ClauseElement
 
 
-_COMMANDS = frozenset({"ALL", "SELECT", "INSERT", "UPDATE", "DELETE"})
+_COMMANDS = {"ALL", "SELECT", "INSERT", "UPDATE", "DELETE"}
 
 
 class Policy(schema.SchemaItem):
@@ -70,13 +71,21 @@ class Policy(schema.SchemaItem):
     ) -> None:
         command = command.upper()
         normalized_roles = (roles,) if isinstance(roles, str) else tuple(roles)
-        self._validate(
-            name=name,
-            command=command,
-            roles=normalized_roles,
-            using=using,
-            check=check,
-        )
+        if not name:
+            raise exc.ArgumentError("Policy name cannot be empty")
+        if command not in _COMMANDS:
+            raise exc.ArgumentError(
+                "Policy command must be one of ALL, SELECT, INSERT, UPDATE, "
+                f"or DELETE, got {command!r}"
+            )
+        if not normalized_roles:
+            raise exc.ArgumentError("Policy roles cannot be empty")
+        if command == "INSERT" and using is not None:
+            raise exc.ArgumentError("INSERT policies cannot define USING")
+        if command in ("SELECT", "DELETE") and check is not None:
+            raise exc.ArgumentError(
+                f"{command} policies cannot define WITH CHECK"
+            )
 
         self.name = name
         self.table = table
@@ -95,31 +104,6 @@ class Policy(schema.SchemaItem):
         self.permissive = permissive
         if info is not None:
             self.info = info
-
-    @staticmethod
-    def _validate(
-        *,
-        name: str,
-        command: str,
-        roles: Sequence[str],
-        using: _TextCoercedExpressionArgument[bool] | None,
-        check: _TextCoercedExpressionArgument[bool] | None,
-    ) -> None:
-        if not name:
-            raise exc.ArgumentError("Policy name cannot be empty")
-        if command not in _COMMANDS:
-            raise exc.ArgumentError(
-                "Policy command must be one of ALL, SELECT, INSERT, UPDATE, "
-                f"or DELETE, got {command!r}"
-            )
-        if not roles:
-            raise exc.ArgumentError("Policy roles cannot be empty")
-        if command == "INSERT" and using is not None:
-            raise exc.ArgumentError("INSERT policies cannot define USING")
-        if command in ("SELECT", "DELETE") and check is not None:
-            raise exc.ArgumentError(
-                f"{command} policies cannot define WITH CHECK"
-            )
 
 
 class CreatePolicy(schema._CreateDropBase[Policy]):
@@ -143,25 +127,30 @@ class DropPolicy(schema._CreateDropBase[Policy]):
         self.if_exists = if_exists
 
 
-class EnableRowLevelSecurity(schema._CreateDropBase[schema.Table]):
+class _SetRowLevelSecurity(schema._CreateDropBase[schema.Table]):
+    __visit_name__ = "set_row_level_security"
+    action: ClassVar[str]
+
+
+class EnableRowLevelSecurity(_SetRowLevelSecurity):
     """Represent enabling row level security for a table."""
 
-    __visit_name__ = "enable_row_level_security"
+    action = "ENABLE"
 
 
-class DisableRowLevelSecurity(schema._CreateDropBase[schema.Table]):
+class DisableRowLevelSecurity(_SetRowLevelSecurity):
     """Represent disabling row level security for a table."""
 
-    __visit_name__ = "disable_row_level_security"
+    action = "DISABLE"
 
 
-class ForceRowLevelSecurity(schema._CreateDropBase[schema.Table]):
+class ForceRowLevelSecurity(_SetRowLevelSecurity):
     """Represent forcing row level security for a table owner."""
 
-    __visit_name__ = "force_row_level_security"
+    action = "FORCE"
 
 
-class NoForceRowLevelSecurity(schema._CreateDropBase[schema.Table]):
+class NoForceRowLevelSecurity(_SetRowLevelSecurity):
     """Represent restoring the table owner's row security bypass."""
 
-    __visit_name__ = "no_force_row_level_security"
+    action = "NO FORCE"

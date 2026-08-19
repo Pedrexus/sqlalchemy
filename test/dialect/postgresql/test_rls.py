@@ -152,10 +152,8 @@ class PolicyReflectionTest(fixtures.TestBase):
 
         state = inspector.get_row_security(table.name)
 
-        eq_(
-            state,
-            {"enabled": False, "forced": False, "policies": []},
-        )
+        eq_(state, {"enabled": False, "forced": False})
+        eq_(inspector.get_policies(table.name), [])
         with expect_raises_message(
             exc.NoSuchTableError, "policy_reflection_missing"
         ):
@@ -175,18 +173,24 @@ class PolicyReflectionTest(fixtures.TestBase):
             roles=("PUBLIC",),
             using=table.c.owner_id == 7,
         )
-        event.listen(table, "after_create", EnableRowLevelSecurity(table))
-        event.listen(table, "after_create", ForceRowLevelSecurity(table))
-        event.listen(table, "after_create", CreatePolicy(policy))
+        for ddl in (
+            EnableRowLevelSecurity(table),
+            ForceRowLevelSecurity(table),
+            CreatePolicy(policy),
+        ):
+            event.listen(table, "after_create", ddl)
         table.create(connection)
 
-        state = inspect(connection).get_row_security(table.name)
+        inspector = inspect(connection)
+        reflected = {
+            "state": inspector.get_row_security(table.name),
+            "policies": inspector.get_policies(table.name),
+        }
 
         eq_(
-            state,
+            reflected,
             {
-                "enabled": True,
-                "forced": True,
+                "state": {"enabled": True, "forced": True},
                 "policies": [
                     {
                         "name": "read",
@@ -201,8 +205,10 @@ class PolicyReflectionTest(fixtures.TestBase):
         )
 
         eq_(
-            inspect(connection).get_multi_row_security(
-                filter_names=(table.name,)
-            ),
-            {(None, table.name): state},
+            inspector.get_multi_row_security(filter_names=(table.name,)),
+            {(None, table.name): reflected["state"]},
+        )
+        eq_(
+            inspector.get_multi_policies(filter_names=(table.name,)),
+            {(None, table.name): reflected["policies"]},
         )

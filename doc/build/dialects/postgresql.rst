@@ -67,14 +67,8 @@ Row level security
 ------------------
 
 PostgreSQL row level security is represented by the
-:class:`_postgresql.Policy` schema object and explicit DDL elements. The
-database evaluates these policies for every SQL access path. They are distinct
-from application query criteria such as
-:func:`_orm.with_loader_criteria`, which only affect ORM statements that use
-that option. These constructs target PostgreSQL 18 and newer.
-
-The following policy permits readers to see rows owned by the current
-application user.
+:class:`_postgresql.Policy` schema object and explicit DDL elements. These
+constructs target PostgreSQL 18 and newer.
 
 .. code-block:: python
 
@@ -82,7 +76,6 @@ application user.
     from sqlalchemy import Integer
     from sqlalchemy import MetaData
     from sqlalchemy import Table
-    from sqlalchemy import func
     from sqlalchemy.dialects.postgresql import CreatePolicy
     from sqlalchemy.dialects.postgresql import EnableRowLevelSecurity
     from sqlalchemy.dialects.postgresql import Policy
@@ -99,20 +92,20 @@ application user.
         document,
         command="SELECT",
         roles=("application_reader",),
-        using=document.c.owner_id
-        == func.current_setting("app.user_id").cast(Integer),
+        using=document.c.owner_id == 7,
     )
 
     with engine.begin() as connection:
         connection.execute(EnableRowLevelSecurity(document))
         connection.execute(CreatePolicy(read_policy))
 
-The available policy DDL elements are :class:`_postgresql.CreatePolicy` and
-:class:`_postgresql.DropPolicy`.
-Table state is controlled by :class:`_postgresql.EnableRowLevelSecurity`,
+Policy creation and removal use :class:`_postgresql.CreatePolicy` and
+:class:`_postgresql.DropPolicy`. Table state is controlled independently by
+:class:`_postgresql.EnableRowLevelSecurity`,
 :class:`_postgresql.DisableRowLevelSecurity`,
 :class:`_postgresql.ForceRowLevelSecurity`, and
-:class:`_postgresql.NoForceRowLevelSecurity`.
+:class:`_postgresql.NoForceRowLevelSecurity`. None of these constructs are
+emitted implicitly by :meth:`_schema.MetaData.create_all`.
 
 .. warning::
 
@@ -122,38 +115,22 @@ Table state is controlled by :class:`_postgresql.EnableRowLevelSecurity`,
    <https://www.postgresql.org/docs/current/ddl-rowsecurity.html>`_ for the
    complete security model.
 
-Policies are not installed implicitly by :meth:`_schema.MetaData.create_all`.
-Applications that want policy DDL to follow table creation can opt in through
-standard :class:`.DDLEvents`.
-
-.. code-block:: python
-
-    from sqlalchemy import event
-
-    event.listen(
-        document,
-        "after_create",
-        EnableRowLevelSecurity(document),
-    )
-    event.listen(document, "after_create", CreatePolicy(read_policy))
-
 Policy expressions may be SQLAlchemy expressions or trusted SQL strings.
-Policy changes require dropping and recreating the policy.
-
-The PostgreSQL Inspector reports the full row security state for one table.
+The PostgreSQL Inspector reports table state and policies separately.
 
 .. code-block:: python
 
     from sqlalchemy import inspect
 
-    state = inspect(connection).get_row_security("document")
+    inspector = inspect(connection)
+    state = inspector.get_row_security("document")
+    policies = inspector.get_policies("document")
 
-The result contains the table's ``enabled`` and ``forced`` flags and an ordered
-``policies`` list. Each policy reports its name, command, roles, permissive
-mode, and optional ``using`` and ``check`` expressions.
-
-Use :meth:`_postgresql.PGInspector.get_multi_row_security` to reflect several
-tables with one catalog query.
+The state contains the table's ``enabled`` and ``forced`` flags. Each reflected
+policy reports its name, command, roles, permissive mode, and optional ``using``
+and ``check`` expressions. Use
+:meth:`_postgresql.PGInspector.get_multi_row_security` and
+:meth:`_postgresql.PGInspector.get_multi_policies` for bulk reflection.
 
 ENUM Types
 ----------

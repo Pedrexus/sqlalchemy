@@ -3,7 +3,7 @@
 
     Added PostgreSQL 18 row level security schema objects and typed DDL elements
     for policy creation and removal together with table enable and force
-    state. Added
-    :meth:`_postgresql.PGInspector.get_row_security` to reflect table flags and
-    complete policy definitions. Added
-    :meth:`_postgresql.PGInspector.get_multi_row_security` for bulk reflection.
+    state. Added :meth:`_postgresql.PGInspector.get_row_security` and
+    :meth:`_postgresql.PGInspector.get_policies` to reflect table flags and
+    policy definitions separately, together with bulk reflection methods for
+    both.
